@@ -1,0 +1,211 @@
+﻿@page "/create"
+@using System
+@using System.Collections.Generic
+@using System.ComponentModel.DataAnnotations
+@using System.IO
+@using System.Linq
+@using System.Threading.Tasks
+@using Microsoft.AspNetCore.Components.Forms
+@using movies_rating.Models
+@using Microsoft.AspNetCore.Authorization
+@inject movies_rating.Data.ApplicationDbContext Db
+@inject NavigationManager NavigationManager
+
+@attribute [Authorize]
+
+<PageTitle>Add New Movie</PageTitle>
+
+<h3>Add New Movie</h3>
+
+<EditForm Model="@movieModel" OnValidSubmit="HandleValidSubmit">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <!-- Title -->
+    <div class="mb-3">
+        <label class="form-label">Title</label>
+        <InputText class="form-control" @bind-Value="movieModel.Title" />
+        <ValidationMessage For="@(() => movieModel.Title)" />
+    </div>
+
+    <!-- Release Date -->
+    <div class="mb-3">
+        <label class="form-label">Release Date</label>
+        <InputDate class="form-control" @bind-Value="movieModel.ReleaseDate" />
+        <ValidationMessage For="@(() => movieModel.ReleaseDate)" />
+    </div>
+
+    <!-- Description -->
+    <div class="mb-3">
+        <label class="form-label">Description</label>
+        <InputTextArea class="form-control" @bind-Value="movieModel.Description" />
+    </div>
+
+    <hr />
+
+    <!-- Poster Upload -->
+    <div class="mb-3">
+        <label class="form-label">Poster Image (square)</label>
+        <InputFile OnChange="HandleSelectedImage" accept="image/*" />
+        @if (!string.IsNullOrEmpty(imageError))
+        {
+            <div class="text-danger small mt-1">@imageError</div>
+        }
+    </div>
+    @if (posterPreviewUrl != null)
+    {
+        <div class="mb-3">
+            <img src="@posterPreviewUrl"
+                 alt="Poster preview"
+                 style="width:150px; height:150px; object-fit:cover; border:1px solid #ccc;" />
+        </div>
+    }
+
+    <hr />
+
+    <!-- Initial Ratings -->
+    <h5>Add Initial Ratings</h5>
+    <div class="mb-3">
+        <label class="form-label">New Rating</label>
+        <InputNumber TValue="int?" class="form-control"
+                     @bind-Value="newRating"
+                     placeholder="1–5" />
+        @if (!string.IsNullOrEmpty(ratingError))
+        {
+            <div class="text-danger small mt-1">@ratingError</div>
+        }
+    </div>
+    <button type="button" class="btn btn-secondary mb-3" @onclick="AddRating">Add Rating</button>
+
+    @if (movieModel.InitialRatings.Any())
+    {
+        <ul class="list-group mb-3">
+            @for (int i = 0; i < movieModel.InitialRatings.Count; i++)
+            {
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    @movieModel.InitialRatings[i].Score
+                    <button type="button"
+                            class="btn btn-sm btn-outline-danger"
+                            @onclick="() => RemoveRating(i)">
+                        ✕
+                    </button>
+                </li>
+            }
+        </ul>
+    }
+
+    <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Save Movie</button>
+        <button type="button" class="btn btn-link" @onclick="Cancel">Cancel</button>
+    </div>
+</EditForm>
+
+@code {
+    private CreateMovieDto movieModel = new();
+    private int? newRating;
+    private string? ratingError;
+
+    private byte[]? posterImageData;
+    private string? posterImageContentType;
+    private string? posterPreviewUrl;
+    private string? imageError;
+
+    class CreateMovieDto
+    {
+        [Required, StringLength(200)]
+        public string Title { get; set; }
+
+        [DataType(DataType.Date)]
+        public DateTime? ReleaseDate { get; set; }
+
+        public string? Description { get; set; }
+
+        public List<RatingDto> InitialRatings { get; set; } = new();
+    }
+
+    class RatingDto
+    {
+        public int Score { get; set; }
+    }
+
+    void AddRating()
+    {
+        ratingError = null;
+        if (!newRating.HasValue)
+        {
+            ratingError = "Enter rating.";
+            return;
+        }
+        if (newRating < 1 || newRating > 5)
+        {
+            ratingError = "Rating must be between 1 and 5.";
+            return;
+        }
+        movieModel.InitialRatings.Add(new RatingDto { Score = newRating.Value });
+        newRating = null;
+    }
+
+    void RemoveRating(int i) => movieModel.InitialRatings.RemoveAt(i);
+
+    async Task HandleSelectedImage(InputFileChangeEventArgs e)
+    {
+        imageError = null;
+        var file = e.File;
+
+        if (!file.ContentType.StartsWith("image/"))
+        {
+            imageError = "Only image files are allowed.";
+            return;
+        }
+
+        const long maxBytes = 5 * 1024 * 1024;
+        if (file.Size > maxBytes)
+        {
+            imageError = "Max size: 5 MB.";
+            return;
+        }
+
+        const string format = "image/png";
+        var resizedFile = await file.RequestImageFileAsync(format, 500, 500);
+        using var stream = resizedFile.OpenReadStream(maxBytes);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+
+        posterImageData = ms.ToArray();
+        posterImageContentType = format;
+        posterPreviewUrl = $"data:{format};base64,{Convert.ToBase64String(posterImageData)}";
+    }
+
+    async Task HandleValidSubmit()
+    {
+        var movie = new Movie
+            {
+                Title = movieModel.Title,
+                ReleaseDate = movieModel.ReleaseDate,
+                Description = movieModel.Description,
+                Ratings = new List<Rating>()
+            };
+
+        if (posterImageData != null && posterImageContentType != null)
+        {
+            movie.PosterImageData = posterImageData;
+            movie.PosterImageContentType = posterImageContentType;
+        }
+
+        foreach (var dto in movieModel.InitialRatings)
+        {
+            movie.Ratings.Add(new Rating
+                {
+                    Score = dto.Score,
+                    CreatedAt = DateTime.UtcNow,
+                    UserId = null
+                });
+        }
+
+        Db.Movies.Add(movie);
+        await Db.SaveChangesAsync();
+        NavigationManager.NavigateTo("/");
+    }
+
+    void Cancel() => NavigationManager.NavigateTo("/");
+}

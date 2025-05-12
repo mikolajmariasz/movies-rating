@@ -1,0 +1,288 @@
+﻿@page "/"
+@using System
+@using System.Collections.Generic
+@using System.Linq
+@using System.Security.Claims
+@using System.Threading.Tasks
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components
+@using movies_rating.Models
+@inject movies_rating.Data.ApplicationDbContext Db
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Movies</PageTitle>
+
+<h3>Movies List</h3>
+
+<button class="btn btn-success mb-3" @onclick='() => Navigation.NavigateTo("/create")'>
+    Add Movie
+</button>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Poster</th>
+            <th @onclick='() => OnSort("Title")' style="cursor:pointer">
+                Title @GetSortIndicator("Title")
+            </th>
+            <th @onclick='() => OnSort("ReleaseDate")' style="cursor:pointer">
+                Release Date @GetSortIndicator("ReleaseDate")
+            </th>
+            <th @onclick='() => OnSort("AverageRating")' style="cursor:pointer">
+                Average Rating @GetSortIndicator("AverageRating")
+            </th>
+            <th @onclick='() => OnSort("UserRating")' style="cursor:pointer">
+                Your Rating @GetSortIndicator("UserRating")
+            </th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (items == null)
+        {
+            <tr><td colspan="6">Loading...</td></tr>
+        }
+        else
+        {
+            @foreach (var item in items)
+            {
+                <tr>
+                    <td>
+                        @if (item.Movie.PosterImageData != null && !string.IsNullOrEmpty(item.Movie.PosterImageContentType))
+                        {
+                            var b64 = Convert.ToBase64String(item.Movie.PosterImageData);
+                            <img src=@($"data:{item.Movie.PosterImageContentType};base64,{b64}")
+                                 alt="Poster"
+                                 style="width:75px;height:75px;object-fit:cover;" />
+                        }
+                        else
+                        {
+                            <span>No image</span>
+                        }
+                    </td>
+                    <td><a href="@($"/details/{item.Movie.Id}")">@item.Movie.Title</a></td>
+                    <td>@item.Movie.ReleaseDate?.ToString("yyyy-MM-dd")</td>
+                    <td>@item.Movie.AverageRating</td>
+                    <td>
+                        <AuthorizeView>
+                            <Authorized>
+                                @if (!item.UserRating.HasValue)
+                                {
+                                    <InputNumber TValue="int?"
+                                                 @bind-Value="item.PendingRating"
+                                                 min="1" max="5"
+                                                 class="form-control d-inline-block"
+                                                 style="width:80px;" />
+                                    <button class="btn btn-sm btn-primary ms-1"
+                                            @onclick="() => SubmitRating(item)">
+                                        Rate
+                                    </button>
+                                    @if (!string.IsNullOrEmpty(item.Error))
+                                    {
+                                        <div class="text-danger small">
+                                            @item.Error
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    <span>Your rating: @item.UserRating</span>
+                                }
+                            </Authorized>
+                            <NotAuthorized>
+                                <span>Log in to rate</span>
+                            </NotAuthorized>
+                        </AuthorizeView>
+                    </td>
+                    <td>
+                        <AuthorizeView>
+                            <Authorized>
+                                <button class="btn btn-sm btn-success"
+                                        @onclick="() => EditMovie(item)">
+                                    Edit
+                                </button>
+                                <button class="btn btn-sm btn-danger"
+                                        @onclick="() => DeleteMovie(item)">
+                                    Delete
+                                </button>
+                                @if (!string.IsNullOrEmpty(item.DeleteError))
+                                {
+                                    <div class="text-danger small">@item.DeleteError</div>
+                                }
+                            </Authorized>
+                            <NotAuthorized>
+                            </NotAuthorized>
+                        </AuthorizeView>
+                    </td>
+                </tr>
+            }
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<MovieRatingItem>? items;
+    private string? userId;
+
+    private string sortColumn = "Title";
+    private bool sortAscending = true;
+
+    class MovieRatingItem
+    {
+        public Movie Movie { get; set; }
+        public int? PendingRating { get; set; }
+        public int? UserRating { get; set; }
+        public string? Error { get; set; }
+        public string? DeleteError { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        }
+
+        var movies = await Db.Movies
+            .Include(m => m.Ratings)
+            .ToListAsync();
+
+        items = movies.Select(m =>
+        {
+            var mr = new MovieRatingItem { Movie = m };
+            if (userId != null)
+            {
+                var existing = m.Ratings.FirstOrDefault(r => r.UserId == userId);
+                if (existing != null)
+                {
+                    mr.UserRating = existing.Score;
+                }
+            }
+            return mr;
+        }).ToList();
+
+        ApplySorting();
+    }
+
+    private void OnSort(string column)
+    {
+        if (sortColumn == column)
+        {
+            sortAscending = !sortAscending;
+        }
+        else
+        {
+            sortColumn = column;
+            sortAscending = true;
+        }
+        ApplySorting();
+    }
+
+    private void ApplySorting()
+    {
+        if (items == null) return;
+
+        items = sortColumn switch
+        {
+            "Title" => sortAscending
+                ? items.OrderBy(x => x.Movie.Title).ToList()
+                : items.OrderByDescending(x => x.Movie.Title).ToList(),
+            "ReleaseDate" => sortAscending
+                ? items.OrderBy(x => x.Movie.ReleaseDate).ToList()
+                : items.OrderByDescending(x => x.Movie.ReleaseDate).ToList(),
+            "AverageRating" => sortAscending
+                ? items.OrderBy(x => x.Movie.AverageRating).ToList()
+                : items.OrderByDescending(x => x.Movie.AverageRating).ToList(),
+            "UserRating" => sortAscending
+                ? items.OrderBy(x => x.UserRating).ToList()
+                : items.OrderByDescending(x => x.UserRating).ToList(),
+            _ => items
+        };
+
+        StateHasChanged();
+    }
+
+    private string GetSortIndicator(string column)
+    {
+        if (sortColumn != column) return string.Empty;
+        return sortAscending ? "▲" : "▼";
+    }
+
+    private async Task SubmitRating(MovieRatingItem item)
+    {
+        item.Error = null;
+        if (!item.PendingRating.HasValue)
+        {
+            item.Error = "Enter rating between 1 and 5";
+            return;
+        }
+        var value = item.PendingRating.Value;
+        if (value < 1 || value > 5)
+        {
+            item.Error = "Rating must be between 1 and 5.";
+            return;
+        }
+        var exists = await Db.Ratings
+            .FirstOrDefaultAsync(r => r.MovieId == item.Movie.Id && r.UserId == userId);
+        if (exists != null)
+        {
+            item.Error = "You already rated this movie.";
+            return;
+        }
+
+        var rating = new Rating
+        {
+            MovieId = item.Movie.Id,
+            Score = value,
+            CreatedAt = DateTime.UtcNow,
+            UserId = userId
+        };
+        Db.Ratings.Add(rating);
+        await Db.SaveChangesAsync();
+
+        item.UserRating = rating.Score;
+        item.Movie.Ratings.Add(rating);
+        item.PendingRating = null;
+
+        ApplySorting();
+    }
+
+    private void EditMovie(MovieRatingItem item)
+    {
+        Navigation.NavigateTo($"/edit/{item.Movie.Id}");
+    }
+
+    private async Task DeleteMovie(MovieRatingItem item)
+    {
+        // jeśli niezalogowany, przekieruj do logowania
+        if (string.IsNullOrEmpty(userId))
+        {
+            Navigation.NavigateTo($"/Identity/Account/Login?returnUrl={Uri.EscapeDataString(Navigation.Uri)}");
+            return;
+        }
+
+        item.DeleteError = null;
+        try
+        {
+            var toDelete = await Db.Movies.FindAsync(item.Movie.Id);
+            if (toDelete != null)
+            {
+                Db.Movies.Remove(toDelete);
+                await Db.SaveChangesAsync();
+                items.Remove(item);
+            }
+            else
+            {
+                item.DeleteError = "Movie not found.";
+            }
+        }
+        catch (Exception ex)
+        {
+            item.DeleteError = ex.Message;
+        }
+    }
+}

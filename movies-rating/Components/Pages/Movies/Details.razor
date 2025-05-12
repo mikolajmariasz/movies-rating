@@ -1,0 +1,153 @@
+﻿@page "/details/{id:int}"
+@using System
+@using System.Linq
+@using System.Threading.Tasks
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@using movies_rating.Models
+@inject movies_rating.Data.ApplicationDbContext Db
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Movie Details</PageTitle>
+
+@if (movie == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <div class="card mb-4">
+        <div class="row g-0">
+            <div class="col-md-4">
+                @if (movie.PosterImageData != null)
+                {
+                    var b64 = Convert.ToBase64String(movie.PosterImageData);
+                    <img src="@( $"data:{movie.PosterImageContentType};base64,{b64}" )"
+                         class="img-fluid rounded-start"
+                         alt="@movie.Title" />
+                }
+                else
+                {
+                    <div class="text-muted p-4">No poster available</div>
+                }
+            </div>
+            <div class="col-md-8">
+                <div class="card-body">
+                    <h2 class="card-title">@movie.Title</h2>
+                    <p class="card-text">@movie.Description</p>
+                    <p class="card-text">
+                        <strong>Release Date:</strong> @movie.ReleaseDate?.ToString("yyyy-MM-dd")
+                    </p>
+                    <p class="card-text">
+                        <strong>Average Rating:</strong> @(movie.Ratings.Any()
+                    ? movie.Ratings.Average(r => r.Score).ToString("0.0")
+                    : "No ratings yet")
+                    </p>
+
+                    <p class="card-text">
+                        <strong>Number of Ratings:</strong> @movie.Ratings.Count
+                    </p>
+
+                    <AuthorizeView Context="authState">
+                        <Authorized>
+                            @if (!userRating.HasValue)
+                            {
+                                <EditForm Model="movie" OnValidSubmit="HandleRating">
+                                    <DataAnnotationsValidator />
+                                    <div class="d-flex align-items-center">
+                                        <InputNumber @bind-Value="pendingRating"
+                                                     class="form-control d-inline-block"
+                                                     style="width:80px;"
+                                                     min="1" max="5" />
+                                        <button type="submit" class="btn btn-primary btn-sm ms-2">
+                                            Submit Rating
+                                        </button>
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(errorMsg))
+                                    {
+                                        <div class="text-danger small mt-2">@errorMsg</div>
+                                    }
+                                </EditForm>
+                            }
+                            else
+                            {
+                                <p>Your rating: @userRating</p>
+                            }
+                        </Authorized>
+                        <NotAuthorized>
+                            <p><em>Log in to rate this movie.</em></p>
+                        </NotAuthorized>
+                    </AuthorizeView>
+
+                    <button class="btn btn-secondary mt-3" @onclick='() => Navigation.NavigateTo("/")'>
+                        Back to list
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int id { get; set; }
+    private Movie? movie;
+    private int? pendingRating;
+    private int? userRating;
+    private string? errorMsg;
+    private string? userId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (auth.User.Identity?.IsAuthenticated == true)
+            userId = auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        movie = await Db.Movies
+            .Include(m => m.Ratings)
+            .FirstOrDefaultAsync(m => m.Id == id);
+
+        if (movie != null && userId != null)
+        {
+            var existing = movie.Ratings.FirstOrDefault(r => r.UserId == userId);
+            if (existing != null)
+                userRating = existing.Score;
+        }
+
+        if (movie == null)
+            Navigation.NavigateTo("/");
+    }
+
+    private async Task HandleRating()
+    {
+        errorMsg = null;
+        if (!pendingRating.HasValue || pendingRating < 1 || pendingRating > 5)
+        {
+            errorMsg = "Enter a value from 1 to 5.";
+            return;
+        }
+        if (movie == null || userId == null)
+            return;
+
+        if (movie.Ratings.Any(r => r.UserId == userId))
+        {
+            errorMsg = "You already rated this movie.";
+            return;
+        }
+
+        var rating = new Rating
+            {
+                MovieId = movie.Id,
+                Score = pendingRating.Value,
+                CreatedAt = DateTime.UtcNow,
+                UserId = userId
+            };
+        Db.Ratings.Add(rating);
+        await Db.SaveChangesAsync();
+
+        movie.Ratings.Add(rating);
+        userRating = rating.Score;
+    }
+}

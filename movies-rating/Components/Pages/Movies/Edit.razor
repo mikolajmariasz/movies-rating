@@ -1,0 +1,115 @@
+﻿@page "/edit/{id:int}"
+@using System
+@using System.IO
+@using System.Threading.Tasks
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Authorization
+@using movies_rating.Models
+@inject movies_rating.Data.ApplicationDbContext Db
+@inject NavigationManager Navigation
+
+@attribute [Authorize]
+
+<PageTitle>Edit Movie</PageTitle>
+
+<h3>Edit Movie</h3>
+
+@if (movie == null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <EditForm Model="movie" OnValidSubmit="HandleValidSubmit">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        <div class="mb-3">
+            <label class="form-label">Title</label>
+            <InputText class="form-control" @bind-Value="movie.Title" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Description</label>
+            <InputTextArea class="form-control" @bind-Value="movie.Description" Rows="4" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Release Date</label>
+            <InputDate class="form-control" @bind-Value="movie.ReleaseDate" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Poster Image</label><br />
+            @if (movie.PosterImageData != null && !string.IsNullOrEmpty(movie.PosterImageContentType))
+            {
+                var previewB64 = Convert.ToBase64String(movie.PosterImageData);
+                <img src="@( $"data:{movie.PosterImageContentType};base64,{previewB64}" )"
+                     alt="Poster Preview"
+                     style="max-width:150px;max-height:150px;object-fit:cover;margin-bottom:10px;" />
+            }
+            <InputFile OnChange="OnInputFileChange" accept="image/*" />
+        </div>
+
+        @if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <div class="alert alert-danger">@ErrorMessage</div>
+        }
+
+        <button type="submit" class="btn btn-primary me-2">Save</button>
+        <button type="button" class="btn btn-secondary" @onclick='() => Navigation.NavigateTo("/")'>
+            Cancel
+        </button>
+    </EditForm>
+}
+
+@code {
+    [Parameter]
+    public int id { get; set; }
+
+    private Movie? movie;
+    private IBrowserFile? selectedFile;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        movie = await Db.Movies.FindAsync(id);
+        if (movie == null)
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+
+    private void OnInputFileChange(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+    }
+
+    private async Task HandleValidSubmit()
+    {
+        ErrorMessage = null;
+        try
+        {
+            if (selectedFile != null && movie != null)
+            {
+                using var ms = new MemoryStream();
+                await selectedFile.OpenReadStream(5 * 1024 * 1024).CopyToAsync(ms);
+                movie.PosterImageData = ms.ToArray();
+                movie.PosterImageContentType = selectedFile.ContentType;
+            }
+
+            if (movie != null)
+            {
+                Db.Movies.Update(movie);
+                await Db.SaveChangesAsync();
+            }
+
+            Navigation.NavigateTo("/");
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = ex.Message;
+        }
+    }
+}
